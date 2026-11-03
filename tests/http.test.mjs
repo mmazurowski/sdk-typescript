@@ -861,6 +861,40 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   );
 });
 
+test("transient failures retry when the error body is not a problem document", async (t) => {
+  let attempts = 0;
+  const fixture = await server(t, (request, response) => {
+    attempts += 1;
+    if (request.url.includes("fatal")) {
+      response.writeHead(500, { "content-type": "text/html" });
+      return response.end("<html><body>Boom</body></html>");
+    }
+    if (attempts === 1) {
+      // A proxy answers with HTML, not application/problem+json.
+      response.writeHead(503, {
+        "content-type": "text/html",
+        "Retry-After": "0",
+      });
+      return response.end("<html><body>Service Unavailable</body></html>");
+    }
+    return json(response, 200, { id: reviewId });
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const review = await client.getReview({
+    path: { org_id: orgId, review_id: reviewId },
+  });
+  assert.equal(review.id, reviewId);
+  assert.equal(fixture.calls.length, 2);
+  // A status the client never retries still reports the status, not a decode error.
+  await assert.rejects(
+    client.getReview({ path: { org_id: orgId, review_id: "fatal" } }),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.status === 500 &&
+      error.type === "about:blank",
+  );
+});
+
 test("credentials remain on the configured origin and malformed responses carry no raw body", async (t) => {
   for (const baseUrl of [
     "http://customer.example",
