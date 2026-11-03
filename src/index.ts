@@ -89,6 +89,45 @@ export class ProoflineClient extends Operations {
     );
   }
 
+  async *iterExport(
+    parameters: ExportParameters,
+    options: { maxPages?: number; maxItems?: number } = {},
+  ): AsyncGenerator<Record<string, unknown>> {
+    const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
+    const maxItems = integerLimit(options.maxItems ?? 10_000, "maxItems");
+    const seen = new Set<string>();
+    let count = 0;
+    let cursor = parameters.query.cursor;
+    let snapshot: string | undefined;
+    for (let index = 0; index < maxPages; index += 1) {
+      // Every page repeats the caller's dataset, window, format and grouping
+      // so a continuation cannot silently widen or narrow the export.
+      const page = await this.exportReviews({
+        ...parameters,
+        query: {
+          ...parameters.query,
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+      });
+      // Pages stitched from different settlement snapshots are not one export.
+      if (snapshot === undefined) snapshot = page.settledUntil;
+      else if (page.settledUntil !== snapshot)
+        throw protocol("the export pages span more than one settled snapshot");
+      for (const row of page.rows) {
+        if (count >= maxItems)
+          throw protocol("the export collection exceeds maxItems");
+        count += 1;
+        yield row;
+      }
+      if (!page.nextCursor) return;
+      if (page.nextCursor === cursor || seen.has(page.nextCursor))
+        throw protocol("the export collection has no advancing cursor");
+      seen.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    throw protocol("the export collection exceeds maxPages");
+  }
+
   async *iterReviews(
     parameters: ListReviewsParameters,
     options: { maxPages?: number; maxItems?: number } = {},

@@ -946,6 +946,93 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
   );
 });
 
+test("export iteration walks cursors, pins the window and refuses snapshot drift", async (t) => {
+  let mode = "normal";
+  const fixture = await server(t, (request, response) => {
+    const cursor = new URL(request.url, "http://127.0.0.1").searchParams.get(
+      "cursor",
+    );
+    const last = (mode === "normal" || mode === "blank") && cursor !== null;
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until":
+        mode === "drift" && cursor !== null
+          ? "2026-10-26T00:00:00Z"
+          : "2026-10-25T00:00:00Z",
+      ...(last
+        ? // A present-but-empty continuation also marks the final page.
+          mode === "blank"
+          ? { "x-proofline-export-next-cursor": "" }
+          : {}
+        : {
+            "x-proofline-export-next-cursor":
+              mode === "cycle" ? "opaque/+cursor" : cursor ? "third" : "second",
+          }),
+    });
+    response.end(
+      `{"dataset_version":1,"claim":"${cursor ?? "first"}"}\n` +
+        `{"dataset_version":1,"claim":"${cursor ?? "first"}-b"}\n`,
+    );
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, dataset: "findings" },
+    query: {
+      from: "2026-10-01T00:00:00Z",
+      to: "2026-10-25T00:00:00Z",
+      format: "ndjson",
+      group_by: "repository",
+    },
+  };
+  const rows = await Array.fromAsync(client.iterExport(parameters));
+  assert.deepEqual(
+    rows.map((row) => row.claim),
+    ["first", "first-b", "second", "second-b"],
+  );
+  // Every continuation repeats the dataset window, format and grouping.
+  assert(
+    fixture.calls.every(
+      ({ url }) =>
+        url.includes("from=2026-10-01T00%3A00%3A00Z") &&
+        url.includes("to=2026-10-25T00%3A00%3A00Z") &&
+        url.includes("format=ndjson") &&
+        url.includes("group_by=repository"),
+    ),
+  );
+  assert.match(fixture.calls[1].url, /cursor=second/);
+  mode = "blank";
+  assert.equal(
+    (await Array.fromAsync(client.iterExport(parameters))).length,
+    4,
+  );
+  mode = "drift";
+  await assert.rejects(
+    Array.fromAsync(client.iterExport(parameters)),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response",
+  );
+  mode = "cycle";
+  await assert.rejects(
+    Array.fromAsync(client.iterExport(parameters)),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  mode = "normal";
+  await assert.rejects(
+    Array.fromAsync(client.iterExport(parameters, { maxPages: 1 })),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  await assert.rejects(
+    Array.fromAsync(client.iterExport(parameters, { maxItems: 1 })),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  await assert.rejects(
+    client.iterExport(parameters, { maxPages: 0 }).next(),
+    TypeError,
+  );
+});
+
 test("knowledge negotiates MCP and preserves scoped refusals without retry", async (t) => {
   let refusal = false;
   let wrongId = false;
