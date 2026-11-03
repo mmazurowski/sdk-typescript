@@ -268,8 +268,24 @@ function httpDate(value: string): number {
     : Number.NaN;
 }
 
-export function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+export function sleep(
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal === undefined)
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export class Transport {
@@ -305,6 +321,7 @@ export class Transport {
       JSON.parse(text),
     accept = "application/json, application/problem+json",
     mcpPhase?: "initialize" | "notification" | "call",
+    caller?: AbortSignal,
   ): Promise<T> {
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
@@ -347,7 +364,9 @@ export class Transport {
           "the request deadline expired",
         );
       const requestDeadline = now + remaining;
-      const signal = AbortSignal.timeout(Math.ceil(remaining));
+      const timeout = AbortSignal.timeout(Math.ceil(remaining));
+      const signal =
+        caller === undefined ? timeout : AbortSignal.any([timeout, caller]);
       let response: Response;
       try {
         response = await fetch(url, {
@@ -359,6 +378,7 @@ export class Transport {
           signal,
         });
       } catch {
+        if (caller?.aborted) throw caller.reason;
         if (signal.aborted && waitTimeout)
           throw new ProoflineError(
             0,
