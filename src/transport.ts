@@ -2,6 +2,8 @@ const VERSION = "1.0.4";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
+/** Statuses the server may recover from on its own. */
+export const RETRYABLE = new Set([429, 503]);
 const inspect = Symbol.for("nodejs.util.inspect.custom");
 
 export class SecretToken {
@@ -421,7 +423,7 @@ export class Transport {
       const delay = retryDelay(response.headers.get("Retry-After"), attempt);
       if (
         method !== "GET" ||
-        ![429, 503].includes(response.status) ||
+        !RETRYABLE.has(response.status) ||
         attempt >= MAX_RETRIES ||
         delay === undefined
       )
