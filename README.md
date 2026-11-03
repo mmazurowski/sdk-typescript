@@ -68,6 +68,25 @@ process.stdout.write(page.text);
 // Continue with query.cursor = page.nextCursor when it is not null.
 ```
 
+`iterExport` walks those cursors for you and yields decoded rows, in the same
+shape as `iterReviews`. It repeats the caller's dataset, window, format and
+grouping on every continuation, so a page cannot silently widen or narrow the
+export, and it refuses a cursor that repeats or fails to advance. `maxPages`
+defaults to 100 and `maxItems` to 10,000; both must be positive integers.
+
+Every page carries a settled horizon. `iterExport` refuses an iteration whose
+pages report different horizons, because rows stitched from two settlement
+snapshots are not one export.
+
+```typescript
+for await (const row of client.iterExport({
+  path: { org_id: process.env.PROOFLINE_ORGANIZATION_ID!, dataset: "reviews" },
+  query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+})) {
+  console.log(row);
+}
+```
+
 ## Development
 
 The repository bundles its public API contract in `openapi.public.json`.
