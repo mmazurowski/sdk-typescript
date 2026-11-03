@@ -57,6 +57,8 @@ export interface ReviewOutcome {
 
 export interface WaitOptions {
   timeoutMs?: number;
+  /** Abort the wait, and any request in flight, before timeoutMs elapses. */
+  signal?: AbortSignal;
 }
 
 export class ProoflineClient extends Operations {
@@ -185,6 +187,8 @@ export class ProoflineClient extends Operations {
     const timeout = options.timeoutMs ?? 20 * 60_000;
     if (!Number.isFinite(timeout) || timeout < 0)
       throw new TypeError("timeoutMs must be finite and nonnegative");
+    const signal = options.signal;
+    signal?.throwIfAborted();
     const deadline = performance.now() + timeout;
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
@@ -203,6 +207,11 @@ export class ProoflineClient extends Operations {
           "/api/v1/organizations/{org_id}/reviews/{review_id}",
           { path: { org_id: orgId, review_id: reviewId } },
           deadline,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          signal,
         );
       } catch (error) {
         if (
@@ -245,6 +254,7 @@ export class ProoflineClient extends Operations {
         );
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
+        signal,
       );
       interval = Math.min(interval * 2, 60_000);
     }

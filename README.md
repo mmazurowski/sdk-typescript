@@ -21,6 +21,16 @@ The client reads `PROOFLINE_TOKEN` when no token is passed, keeps the token in m
 and redacts it from diagnostic output. The [SDK guide](https://proofline.sh/docs/sdks/)
 and [API reference](https://proofline.sh/docs/api/) cover every operation.
 
+`waitForReview` polls until the review settles or `timeoutMs` elapses. Pass a
+`signal` to end the wait sooner; the sleep and any request in flight are abandoned
+and the signal's reason is thrown.
+
+```typescript
+const outcome = await client.waitForReview(orgId, reviewId, {
+  signal: AbortSignal.timeout(120_000),
+});
+```
+
 ## Coverage uploads
 
 Upload the reports produced by CI with a repository-restricted token that holds

@@ -861,6 +861,31 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   );
 });
 
+test("a waiting review stops when the caller aborts", async (t) => {
+  const fixture = await server(t, (_request, response) =>
+    json(response, 200, review("PENDING")),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const controller = new AbortController();
+  const started = performance.now();
+  const waiting = client.waitForReview(orgId, reviewId, {
+    signal: controller.signal,
+  });
+  setTimeout(() => controller.abort(new Error("cancelled")), 50);
+  await assert.rejects(waiting, (error) => error.message === "cancelled");
+  // The poll interval is five seconds; abort must not wait for it.
+  assert(performance.now() - started < 2_000);
+  const polls = fixture.calls.length;
+  // An already-aborted signal refuses before any request is made.
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      signal: AbortSignal.abort(new Error("gone")),
+    }),
+    (error) => error.message === "gone",
+  );
+  assert.equal(fixture.calls.length, polls);
+});
+
 test("back-off without a Retry-After header spreads over the window", async (t) => {
   let attempts = 0;
   const fixture = await server(t, (_request, response) => {
