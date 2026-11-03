@@ -219,7 +219,12 @@ function retryDelay(
   header: string | null,
   attempt: number,
 ): number | undefined {
-  if (header === null) return Math.min(2 ** attempt, MAX_RETRY_SECONDS) * 1000;
+  // Without a server-supplied delay, spread the wait over the back-off window.
+  // Clients that fail together would otherwise retry together and collide again.
+  if (header === null) {
+    const window = Math.min(2 ** attempt, MAX_RETRY_SECONDS) * 1000;
+    return window / 2 + Math.random() * (window / 2);
+  }
   const seconds = /^\d+$/.test(header.trim())
     ? Number(header)
     : Math.max(0, (httpDate(header.trim()) - Date.now()) / 1000);

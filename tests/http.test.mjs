@@ -861,6 +861,22 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   );
 });
 
+test("back-off without a Retry-After header spreads over the window", async (t) => {
+  let attempts = 0;
+  const fixture = await server(t, (_request, response) => {
+    attempts += 1;
+    // No Retry-After: the client picks the delay itself.
+    if (attempts === 1) return json(response, 503, { detail: responseCanary });
+    return json(response, 200, { id: reviewId });
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  await client.getReview({ path: { org_id: orgId, review_id: reviewId } });
+  const waited = fixture.calls[1].at - fixture.calls[0].at;
+  // First attempt yields a one second window, halved and jittered.
+  assert(waited >= 450, `waited ${waited}ms, expected at least 450ms`);
+  assert(waited <= 1400, `waited ${waited}ms, expected at most 1400ms`);
+});
+
 test("transient failures retry when the error body is not a problem document", async (t) => {
   let attempts = 0;
   const fixture = await server(t, (request, response) => {
