@@ -16,7 +16,12 @@ export type { ExportPage, ExportParameters } from "./exports.js";
 
 import { type ListReviewsParameters, Operations } from "./operations.js";
 import type { components } from "./schema.js";
-import { type ClientOptions, sleep, Transport } from "./transport.js";
+import {
+  type ClientOptions,
+  RETRYABLE,
+  sleep,
+  Transport,
+} from "./transport.js";
 
 export type * from "./operations.js";
 export type { components, operations, paths } from "./schema.js";
@@ -193,13 +198,16 @@ export class ProoflineClient extends Operations {
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
     let interval = 5_000;
+    let unavailable: ProoflineError | null = null;
     for (;;) {
       if (performance.now() >= deadline)
         return outcome(
           "TIMED_OUT",
           url,
           review,
-          "the review did not finish before timeoutMs",
+          unavailable === null
+            ? "the review did not finish before timeoutMs"
+            : `the review was unreachable before timeoutMs: status ${unavailable.status}`,
         );
       try {
         review = await this.#transport.request<Review>(
@@ -235,8 +243,20 @@ export class ProoflineClient extends Operations {
             review,
             "the review did not finish before timeoutMs",
           );
+        // The transport exhausts its own attempts in seconds. A wait measured
+        // in minutes outlives that, so a busy server costs a poll, not the wait.
+        if (error instanceof ProoflineError && RETRYABLE.has(error.status)) {
+          unavailable = error;
+          await sleep(
+            Math.min(interval, Math.max(0, deadline - performance.now())),
+            signal,
+          );
+          interval = Math.min(interval * 2, 60_000);
+          continue;
+        }
         throw error;
       }
+      unavailable = null;
       validateReview(review, reviewId);
       const status = terminal(review);
       if (status !== null)

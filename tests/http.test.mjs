@@ -861,6 +861,42 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   );
 });
 
+test("a busy server costs a poll, not the whole wait", async (t) => {
+  let mode = "unavailable";
+  const fixture = await server(t, (_request, response) => {
+    if (mode === "unavailable")
+      return json(
+        response,
+        503,
+        { detail: responseCanary },
+        { "Retry-After": "0" },
+      );
+    return json(response, 200, review());
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  // The transport spends its four attempts in milliseconds. The wait owns the
+  // deadline, so it reports its own timeout rather than the server's status.
+  const timedOut = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 40,
+  });
+  assert.equal(timedOut.status, "TIMED_OUT");
+  assert.match(timedOut.reason, /unreachable/);
+  assert.match(timedOut.reason, /503/);
+  assert(fixture.calls.length >= 4);
+  // A burst that ends inside the deadline still settles the review.
+  mode = "unavailable";
+  const polls = fixture.calls.length;
+  setTimeout(() => {
+    mode = "ready";
+  }, 60);
+  const settled = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 20_000,
+  });
+  assert.equal(settled.status, "COMPLETED");
+  assert.equal(settled.reason, null);
+  assert(fixture.calls.length > polls + 4);
+});
+
 test("a waiting review stops when the caller aborts", async (t) => {
   const fixture = await server(t, (_request, response) =>
     json(response, 200, review("PENDING")),
