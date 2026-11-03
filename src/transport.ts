@@ -169,9 +169,16 @@ async function decoded(
       offset += chunk.length;
     }
     const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
-    return response.ok
-      ? decode(text, response.headers)
-      : (JSON.parse(text) as unknown);
+    // A proxy answers 503 with HTML, not a problem document. Treat an
+    // unparseable error body as an absent one so the caller can still retry.
+    if (!response.ok) {
+      try {
+        return JSON.parse(text) as unknown;
+      } catch {
+        return {};
+      }
+    }
+    return decode(text, response.headers);
   } catch (error) {
     if (error instanceof ProoflineError) throw error;
     if (response.ok && (signal.aborted || performance.now() >= deadline))
